@@ -5,11 +5,12 @@ const util = require('util');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
-const merge = require('lodash/merge');
 const random = require('lodash/random');
 const size = require('lodash/size');
 
 const ExcelJS = require('exceljs');
+
+const { mergeObjects } = require('../src/helpers');
 
 const WORKING_DIR = process.cwd();
 
@@ -90,8 +91,7 @@ async function listReceiptsForPeriod(offset = 0, limit = 10) {
   await sleep(random(2000, 4000, true));
 
   return listReceiptsForPeriod(offset + limit, limit)
-    .then((nested) => merge(result, nested))
-    .then(() => result);
+    .then((nested) => mergeObjects(result, nested));
 }
 
 async function fetchFiscalDetails(receipts = []) {

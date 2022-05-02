@@ -69,15 +69,17 @@ async function begin() {
 }
 
 async function listReceiptsForPeriod(offset = 0, limit = 10) {
-  const brands = {};
-
   console.log(`Getting receipts: ${offset} -> ${offset + limit}`);
 
   const { receipts, brands: orig, hasMore } = await getReceipts(OPTIONS.start, OPTIONS.end, offset, limit)
     .then(({ data }) => data)
     .catch(processFailedRequest);
 
-  orig.forEach((brand) => brands[brand.id] = brand);
+  const brands = orig.reduce((acc, brand) => {
+    acc[brand.id] = brand;
+
+    return acc;
+  }, {});
 
   const result = { brands, receipts };
 

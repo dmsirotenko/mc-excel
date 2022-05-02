@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const util = require('util');
+const path = require('path');
 
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
@@ -10,7 +11,15 @@ const size = require('lodash/size');
 
 const ExcelJS = require('exceljs');
 
-const { mergeObjects } = require('../src/helpers');
+const {
+  Format,
+  FISCAL_MAPPING,
+} = require('../src/constants');
+
+const {
+  mergeObjects,
+  processItemsQueue,
+} = require('../src/helpers');
 
 const WORKING_DIR = process.cwd();
 
@@ -33,6 +42,12 @@ const OPTIONS = yargs(hideBin(process.argv))
     type: 'string',
     demandOption: true,
   })
+  .option('f', {
+    alias: 'format',
+    describe: 'Export file format',
+    type: 'string',
+    default: Format.XLSX,
+  })
   .help('help')
   .argv;
 
@@ -45,6 +60,7 @@ const {
 const sleep = util.promisify(setTimeout);
 
 begin()
+  .then(() => console.info('Successfully exported requested receipts'))
   .catch((error) => console.error(error.toString()));
 
 async function begin() {
@@ -53,20 +69,21 @@ async function begin() {
     receipts,
   } = await listReceiptsForPeriod();
 
-  console.log(`Grouped ${size(brands)} brands`);
-  console.log(`Fetched ${size(receipts)} receipts`);
+  console.info(`Grouped ${size(brands)} brands`);
+  console.info(`Fetched ${size(receipts)} receipts`);
 
-  const details = await fetchFiscalDetails(receipts);
+  const fiscal = await fetchFiscalDetails(receipts);
 
-  console.log(`Fetched details for ${size(details)} receipts`);
+  console.info(`Fetched fiscal details for ${size(fiscal)} receipts`);
 
-  const result = details.map(([receipt, fiscal]) => {
+  const result = receipts.map((receipt, index) => {
     const brand = brands[receipt.brandId];
+    const details = fiscal[index];
 
-    return [brand, receipt, fiscal];
+    return [brand, receipt, details];
   })
 
-  convertToWorkbook(result);
+  return convert(result);
 }
 
 async function listReceiptsForPeriod(offset = 0, limit = 10) {
@@ -97,20 +114,65 @@ async function listReceiptsForPeriod(offset = 0, limit = 10) {
 async function fetchFiscalDetails(receipts = []) {
   const result = [];
 
-  while (receipts.length > 0) {
-    const receipt = receipts.shift();
+  await processItemsQueue(receipts, async ({ key }) => {
+    console.log(`Fetching details for receipt ${key}`);
 
-    console.log(`Fetching details for receipt ${receipt.key}`);
-
-    await getFiscalData(receipt.key)
-      .then(({ data }) => result.push([receipt, data]))
+    return getFiscalData(key)
+      .then(({ data }) => result.push(data))
       .then(() => sleep(random(3000, 7000, true)))
       .catch(processFailedRequest);
-  }
+  });
 
   return result;
 }
 
-function convertToWorkbook(receipts = []) {
-  console.log(receipts);
+async function convert(...args) {
+  switch (OPTIONS.format) {
+    case Format.XLSX:
+      return convertToWorkbook(...args);
+    default:
+      throw new TypeError('Unknown export format');
+  }
+}
+
+async function convertToWorkbook(receipts = []) {
+  const workbook = new ExcelJS.Workbook();
+
+  await processItemsQueue(receipts, ([brand, receipt, fiscal]) => {
+    const { kktOwner, receiveDate, fiscalDocumentNumber: num } = receipt;
+
+    const sheetName = `${brand?.name || kktOwner} ${receiveDate.split('T')[0]} (${num})`;
+
+    console.log(`Creating worksheet named ${sheetName}`);
+
+    const worksheet = workbook.addWorksheet(sheetName);
+
+    worksheet.columns = [
+      { header: 'Предмет расчета', key: 'name', width: 50 },
+      { header: 'Кол-во', key: 'quantity', width: 10 },
+      { header: 'Стоимость', key: 'price', width: 20 },
+      { header: 'Сумма', key: 'sum', width: 30 },
+    ];
+
+    fiscal.items.forEach((item) => worksheet.addRow(item));
+
+    const shift = worksheet.columns.length + 7;
+
+    const labelCol = worksheet.getColumn(shift);
+    const valueCol = worksheet.getColumn(shift + 1);
+
+    labelCol.width = 15;
+    labelCol.values = Object.values(FISCAL_MAPPING);
+
+    valueCol.width = 25;
+    valueCol.values = Object.keys(FISCAL_MAPPING)
+      .map((key) => fiscal[key]);
+  });
+
+  const bookName = `MCO ${OPTIONS.start} – ${OPTIONS.end} ${new Date().toISOString()}`;
+  const dest = path.join(WORKING_DIR, `${bookName}.xlsx`);
+
+  console.log(`Writing workbook to file ${dest}`);
+
+  return workbook.xlsx.writeFile(dest);
 }

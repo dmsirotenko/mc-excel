@@ -18,6 +18,15 @@ function mergeObjects(dest, source) {
   });
 }
 
+async function processItemsQueue(items, processor) {
+  const queue = Array.from(items);
+
+  while (queue.length > 0) {
+    await processor(queue.shift());
+  }
+}
+
 module.exports = {
   mergeObjects,
+  processItemsQueue,
 }
